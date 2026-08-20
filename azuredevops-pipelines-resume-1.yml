@@ -1,17 +1,96 @@
-# HTML
-# Archive your static HTML project and save it with the build record.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+# Author Name: Pierre A. Charles
+# Date: Wednesday 19-August-2026
+# Subject: Azure CI security pipeline for GitHub CD development.
+# azure-pipelines.yml
 
-trigger:
-- master
+trigger: none
 
-pool:
-  vmImage: ubuntu-latest
+resources:
+  repositories:
+    - repository: application
+      type: github
+      name: pierreacharles/Resume-1 # YOUR-GITHUB-ORG/YOUR-REPOSITORY
+      endpoint: pierreacharles # YOUR-GITHUB-SERVICE-CONNECTION
+      ref: refs/heads/main
+      trigger:
+        branches:
+          include:
+            - main
+ 
+variables:
+  nodeVersion: '20.x'
+  workingDirectory: '$(Pipeline.Workspace)/application'
+  artifactName: 'webapp'
+  azureServiceConnection: 'Microsoft Azure Portal Pay-As-You-Go(77bfc78a-43c7-4e9b-8124-dd5764acc07a)' # 'YOUR-AZURE-SERVICE-CONNECTION'
+  azureWebAppName: 'Not-Applicable-WebApp' #'YOUR-AZURE-WEB-APP-NAME'
 
-steps:
-- task: ArchiveFiles@2
-  inputs:
-    rootFolderOrFile: '$(build.sourcesDirectory)'
-    includeRootFolder: false
-- task: PublishBuildArtifacts@1
+stages:
+  - stage: Build
+    displayName: Build and test
+    jobs:
+      - job: BuildApplication
+        displayName: Build GitHub application
+        pool:
+          vmImage: ubuntu-latest
+ 
+        steps:
+          - checkout: application
+            clean: true
+            fetchDepth: 1
+            path: application
+ 
+          - task: NodeTool@0
+            displayName: Install Node.js
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - bash: |
+              set -euo pipefail
+              npm ci
+              npm test --if-present
+              npm run build --if-present
+            displayName: Install, test, and build
+            workingDirectory: $(workingDirectory)
+
+          - task: ArchiveFiles@2
+            displayName: Package application
+            inputs:
+              rootFolderOrFile: $(workingDirectory)
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: '$(Build.ArtifactStagingDirectory)/$(artifactName).zip'
+              replaceExistingArchive: true
+ 
+          - publish: '$(Build.ArtifactStagingDirectory)/$(artifactName).zip'
+            artifact: $(artifactName)
+            displayName: Publish deployment artifact
+ 
+  - stage: Deploy
+    displayName: Deploy website or service
+    dependsOn: Build
+    condition: succeeded()
+
+    jobs:
+      - deployment: DeployApplication
+        displayName: Deploy to Azure App Service
+        environment: production
+        pool:
+          vmImage: ubuntu-latest
+
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Deployment jobs do not automatically check out source.
+                - checkout: none
+
+                - download: current
+                  artifact: $(artifactName)
+ 
+                - task: AzureWebApp@1
+                  displayName: Deploy application
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    appType: webAppLinux
+                    appName: $(azureWebAppName)
+                    package: '$(Pipeline.Workspace)/$(artifactName)/$(artifactName).zip'
